@@ -4,7 +4,7 @@ Personal-use Tampermonkey userscript that overlays live aircraft markers on top 
 
 It uses the free Airplanes.live point-radius endpoint directly from the browser. There is no backend, no paid API, and no scraping of third-party tracker pages in v1.
 
-Current version: `0.6.0`
+Current version: `0.7.0`
 Repository: `https://github.com/kgeg401/google-maps-flight-overlay`
 
 ## Files
@@ -35,9 +35,10 @@ If you install from the raw GitHub URL, Tampermonkey can auto-update the script 
 If the script is active, you should see:
 
 - a small status badge in the top-right corner
-- a round flight icon in the bottom-left corner
+- a larger `Flights` launcher in the bottom-left corner
+- the control menu auto-open the first time the page loads
 
-Click the bottom-left flight icon to open or close the overlay menu. Use the menu to toggle logs, copy logs, clear logs, or close the menu again.
+Click the bottom-left `Flights` launcher to open or close the overlay menu. Use the menu to toggle logs, copy logs, clear logs, or close the menu again.
 
 You can also use Tampermonkey's own script menu while you are on Google Maps:
 
@@ -69,8 +70,10 @@ The script has a `CONFIG` block near the top. These are the main values you may 
 - It derives a center-radius query from the current map center and viewport size.
 - It fetches live aircraft from Airplanes.live every 5 seconds.
 - It rerenders markers on pan, zoom, resize, and viewport replacement without refetching on every visual change.
-- It provides a simple control menu opened from a bottom-left flight icon.
+- It provides a simple control menu opened from a bottom-left `Flights` launcher.
+- It auto-opens the menu on page load so script startup is obvious.
 - It also registers Tampermonkey menu commands so the UI and logs can be opened from the extension menu.
+- It supports both `@lat,lon,zoomz` Google Maps URLs and `@lat,lon,metersm` URLs by estimating zoom from the visible map scale.
 - It keeps a rolling in-script debug log with timestamps, message details, and error context.
 - The log panel can be expanded from the menu and collapsed again to save screen space.
 - The log panel includes `Copy`, `Clear`, and `Hide` controls.
@@ -87,11 +90,12 @@ The script has a `CONFIG` block near the top. These are the main values you may 
 - Personal-use PoC only.
 - Airplanes.live is documented as non-commercial and rate-limited.
 - Google Maps can change its DOM at any time, which can break viewport detection.
-- v1 depends on Google Maps exposing a readable `@lat,lon,zoomz` URL. If the page is in a mode that does not expose that shape, the overlay pauses instead of guessing.
-- Google Maps links like `https://www.google.com/maps/@41.5932759,-86.9125756,8641m/data=!3m1!1e3?...` are altitude-style `...m...` URLs, not `...z` zoom URLs, so the UI can open there but aircraft rendering will remain paused.
+- v1 depends on Google Maps exposing a readable `@lat,lon,zoomz` or `@lat,lon,metersm` URL. If the page is in a mode that does not expose either shape, the overlay pauses instead of guessing.
+- `...m...` URLs use an estimated zoom derived from the visible map scale, so placement may be a little less precise than explicit `...z...` URLs.
 - The script does not use `unsafeWindow` or undocumented Google Maps internals, so viewport detection is heuristic and projection alignment is best-effort.
 - v1 does not include labels, filters, persistence, settings sync, or source fallback.
 - Log export uses the browser clipboard. If clipboard access is blocked by the browser, log copying can fail.
+- As of Tampermonkey 5.4.1 on Chrome, userscript injection requires the browser's userscript permission. Based on Tampermonkey's official changelog and FAQ, you may need Chrome's `Allow User Scripts` permission and Developer Mode enabled before any page UI can appear.
 
 ## Manual Checks
 
@@ -109,6 +113,7 @@ Use these checks after installing:
 10. Click `Copy Logs` and confirm a log dump is copied to the clipboard.
 11. Open Tampermonkey's script menu and confirm `Open Flight Overlay Menu` opens the UI.
 12. Use Tampermonkey's `Copy Flight Overlay Logs` command and confirm a log dump is copied.
+13. Open a Google Maps URL like `https://www.google.com/maps/@41.5932759,-86.9125756,8641m/data=!3m1!1e3` and confirm the overlay no longer pauses on the `...m...` URL shape.
 
 ## Data Source
 
@@ -118,6 +123,12 @@ Use these checks after installing:
 ## Version History
 
 Append a new entry here and in the userscript `VERSION_HISTORY` constant whenever the script changes.
+
+### `0.7.0` - 2026-03-25
+
+- Mounted the overlay HUD into `document.body` for more reliable rendering.
+- Made the launcher button larger and auto-opened the menu on boot.
+- Added support for Google Maps `@lat,lon,metersm` URL variants with estimated zoom.
 
 ### `0.6.0` - 2026-03-25
 

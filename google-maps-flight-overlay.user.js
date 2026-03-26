@@ -1,11 +1,12 @@
 // ==UserScript==
 // @name         Google Maps Flight Overlay
 // @namespace    https://github.com/kgeg401/google-maps-flight-overlay
-// @version      0.6.0
+// @version      0.7.0
 // @description  Overlay live aircraft markers on Google Maps using Airplanes.live.
 // @match        https://www.google.com/maps/*
 // @noframes
-// @run-at       document-idle
+// @run-at       document-body
+// @sandbox      DOM
 // @grant        GM_addStyle
 // @grant        GM_registerMenuCommand
 // @grant        GM.xmlHttpRequest
@@ -19,8 +20,17 @@
 (function () {
   "use strict";
 
-  const VERSION = "0.6.0";
+  const VERSION = "0.7.0";
   const VERSION_HISTORY = [
+    {
+      version: "0.7.0",
+      date: "2026-03-25",
+      changes: [
+        "Mounted the overlay HUD into document.body for more reliable rendering.",
+        "Made the launcher button larger and auto-opened the menu on boot.",
+        "Added support for Google Maps @lat,lon,metersm URL variants with estimated zoom.",
+      ],
+    },
     {
       version: "0.6.0",
       date: "2026-03-25",
@@ -94,6 +104,7 @@
     markerStrokeColor: "#07111d",
     markerHighlightColor: "#ffd166",
     markerShadowColor: "rgba(7, 17, 29, 0.28)",
+    autoOpenMenuOnBoot: true,
     debug: false,
   };
 
@@ -181,11 +192,13 @@
       position: fixed;
       left: 16px;
       bottom: 16px;
-      width: 56px;
+      min-width: 116px;
       height: 56px;
+      padding: 0 16px 0 14px;
       display: flex;
       align-items: center;
-      justify-content: center;
+      justify-content: flex-start;
+      gap: 10px;
       pointer-events: auto;
       cursor: pointer;
       border: 1px solid rgba(120, 190, 255, 0.26);
@@ -194,7 +207,9 @@
       color: #f3f7ff;
       box-shadow: 0 12px 24px rgba(0, 0, 0, 0.28);
       backdrop-filter: blur(8px);
-      font-size: 24px;
+      font-size: 16px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
       line-height: 1;
       user-select: none;
     }
@@ -202,6 +217,25 @@
     #gm-flight-overlay-menu-button[data-open="true"] {
       border-color: rgba(89, 215, 255, 0.44);
       box-shadow: 0 12px 24px rgba(0, 0, 0, 0.28), 0 0 0 3px rgba(89, 215, 255, 0.14);
+    }
+
+    .gm-flight-overlay-menu-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      height: 28px;
+      border-radius: 999px;
+      background: rgba(89, 215, 255, 0.14);
+      font-size: 18px;
+      line-height: 1;
+    }
+
+    .gm-flight-overlay-menu-label {
+      display: inline-block;
+      font-size: 14px;
+      line-height: 1;
+      white-space: nowrap;
     }
 
     #gm-flight-overlay-menu-panel {
@@ -405,6 +439,18 @@
     return `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
   }
 
+  function formatZoomSummary(mapState) {
+    if (!mapState) {
+      return "n/a";
+    }
+
+    if (mapState.zoomSource === "meters-estimate") {
+      return `~z${mapState.zoom.toFixed(2)} from ${Math.round(mapState.scaleMeters)}m`;
+    }
+
+    return `z${mapState.zoom.toFixed(2)}`;
+  }
+
   function formatAltitude(aircraft) {
     if (aircraft.onGround) {
       return "GND";
@@ -506,7 +552,7 @@
 
     if (state.mapState) {
       lines.push(
-        `mapState: center=${state.mapState.centerLat},${state.mapState.centerLon} zoom=${state.mapState.zoom}`
+        `mapState: center=${state.mapState.centerLat},${state.mapState.centerLon} zoom=${state.mapState.zoom} source=${state.mapState.zoomSource || "unknown"}`
       );
     } else {
       lines.push("mapState: null");
@@ -565,6 +611,7 @@
   }
 
   function openOverlayMenuFromCommand() {
+    ensureHud();
     setMenuOpen(true);
     logEvent("info", "Opened overlay menu from Tampermonkey command");
     setStatus("ok", "Opened menu from Tampermonkey");
@@ -645,7 +692,7 @@
     const bodyLines = [
       `Status: ${state.statusLevel} ${state.statusText}`,
       state.mapState
-        ? `Map: ${state.mapState.centerLat}, ${state.mapState.centerLon}, z${state.mapState.zoom}`
+        ? `Map: ${state.mapState.centerLat}, ${state.mapState.centerLon}, ${formatZoomSummary(state.mapState)}`
         : "Map: null",
       state.viewportRect
         ? `Viewport: ${Math.round(state.viewportRect.left)}, ${Math.round(state.viewportRect.top)}, ${Math.round(state.viewportRect.width)} x ${Math.round(state.viewportRect.height)}`
@@ -675,7 +722,7 @@
       `Version: ${VERSION}`,
       `Status: ${state.statusLevel} ${state.statusText}`,
       state.mapState
-        ? `Map: z${state.mapState.zoom.toFixed(2)} @ ${formatLatLon(state.mapState.centerLat, state.mapState.centerLon)}`
+        ? `Map: ${formatZoomSummary(state.mapState)} @ ${formatLatLon(state.mapState.centerLat, state.mapState.centerLon)}`
         : "Map: n/a",
       state.viewportRect
         ? `Viewport: ${Math.round(state.viewportRect.width)} x ${Math.round(state.viewportRect.height)}`
@@ -724,7 +771,7 @@
     let summary = `Flight Overlay v${VERSION}\n${state.statusText}`;
 
     if (state.mapState) {
-      summary += `\nMap: z${state.mapState.zoom.toFixed(2)} @ ${formatLatLon(state.mapState.centerLat, state.mapState.centerLon)}`;
+      summary += `\nMap: ${formatZoomSummary(state.mapState)} @ ${formatLatLon(state.mapState.centerLat, state.mapState.centerLon)}`;
     }
 
     if (state.viewportRect) {
@@ -769,8 +816,18 @@
     menuButtonEl.type = "button";
     menuButtonEl.id = "gm-flight-overlay-menu-button";
     menuButtonEl.dataset.open = "false";
-    menuButtonEl.textContent = "✈";
     menuButtonEl.title = "Open flight overlay menu";
+
+    const launcherIconEl = document.createElement("span");
+    launcherIconEl.className = "gm-flight-overlay-menu-icon";
+    launcherIconEl.textContent = "✈";
+
+    const launcherLabelEl = document.createElement("span");
+    launcherLabelEl.className = "gm-flight-overlay-menu-label";
+    launcherLabelEl.textContent = "Flights";
+
+    menuButtonEl.appendChild(launcherIconEl);
+    menuButtonEl.appendChild(launcherLabelEl);
 
     const menuPanelEl = document.createElement("div");
     menuPanelEl.id = "gm-flight-overlay-menu-panel";
@@ -859,7 +916,7 @@
     hudRootEl.appendChild(menuPanelEl);
     hudRootEl.appendChild(tooltipEl);
     hudRootEl.appendChild(logPanelEl);
-    document.documentElement.appendChild(hudRootEl);
+    (document.body || document.documentElement).appendChild(hudRootEl);
 
     state.hudRootEl = hudRootEl;
     state.canvasEl = canvasEl;
@@ -1094,22 +1151,61 @@
   }
 
   function parseMapStateFromUrl(href) {
-    const match = href.match(/@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?),(\d+(?:\.\d+)?)z/i);
-    if (!match) {
+    const zoomMatch = href.match(/@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?),(\d+(?:\.\d+)?)z/i);
+    if (zoomMatch) {
+      const centerLat = Number(zoomMatch[1]);
+      const centerLon = Number(zoomMatch[2]);
+      const zoom = Number(zoomMatch[3]);
+      if (!Number.isFinite(centerLat) || !Number.isFinite(centerLon) || !Number.isFinite(zoom)) {
+        return null;
+      }
+
+      return {
+        centerLat,
+        centerLon,
+        zoom,
+        zoomSource: "zoom",
+        scaleMeters: null,
+      };
+    }
+
+    const meterMatch = href.match(/@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?),(\d+(?:\.\d+)?)m/i);
+    if (!meterMatch) {
       return null;
     }
 
-    const centerLat = Number(match[1]);
-    const centerLon = Number(match[2]);
-    const zoom = Number(match[3]);
-    if (!Number.isFinite(centerLat) || !Number.isFinite(centerLon) || !Number.isFinite(zoom)) {
+    const centerLat = Number(meterMatch[1]);
+    const centerLon = Number(meterMatch[2]);
+    const scaleMeters = Number(meterMatch[3]);
+    const viewportHeight = Math.max(
+      1,
+      Math.round(
+        (state.viewportRect && state.viewportRect.height) ||
+        window.innerHeight ||
+        document.documentElement.clientHeight ||
+        900
+      )
+    );
+    const zoom = Math.log2(
+      (Math.cos(centerLat * DEG_TO_RAD) * WORLD_RESOLUTION_MPP * viewportHeight) / scaleMeters
+    );
+
+    if (
+      !Number.isFinite(centerLat) ||
+      !Number.isFinite(centerLon) ||
+      !Number.isFinite(scaleMeters) ||
+      scaleMeters <= 0 ||
+      !Number.isFinite(zoom)
+    ) {
       return null;
     }
 
     return {
       centerLat,
       centerLon,
-      zoom,
+      zoom: clamp(zoom, 0, 22),
+      zoomSource: "meters-estimate",
+      scaleMeters,
     };
   }
 
@@ -1125,10 +1221,10 @@
       const pauseReason = "url-unreadable";
       if (state.lastPauseReason !== pauseReason) {
         state.lastPauseReason = pauseReason;
-        logEvent("warn", "Paused because URL does not expose @lat,lon,zoomz", { href: nextHref });
+        logEvent("warn", "Paused because URL does not expose @lat,lon,zoomz or @lat,lon,metersm", { href: nextHref });
       }
       if (state.viewportEl) {
-        setStatus("warn", "Paused: map URL does not expose @lat,lon,zoomz");
+        setStatus("warn", "Paused: map URL does not expose zoom data");
       }
       if (prevMapState || hrefChanged) {
         scheduleRender();
@@ -1652,6 +1748,9 @@
       href: window.location.href,
     });
     setStatus("boot", "Booting");
+    if (CONFIG.autoOpenMenuOnBoot) {
+      setMenuOpen(true);
+    }
     syncMapStateFromUrl();
     refreshViewportBinding("force");
     installObservers();
