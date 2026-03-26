@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google Maps Flight Overlay
 // @namespace    https://github.com/kgeg401/google-maps-flight-overlay
-// @version      0.7.0
+// @version      0.8.0
 // @description  Overlay live aircraft markers on Google Maps using Airplanes.live.
 // @match        https://www.google.com/maps/*
 // @noframes
@@ -20,8 +20,17 @@
 (function () {
   "use strict";
 
-  const VERSION = "0.7.0";
+  const VERSION = "0.8.0";
   const VERSION_HISTORY = [
+    {
+      version: "0.8.0",
+      date: "2026-03-26",
+      changes: [
+        "Excluded the overlay UI from viewport detection so it cannot bind to itself.",
+        "Added a high-frequency render loop while the map is being zoomed or panned.",
+        "Added fetch backoff and interaction settle delays to reduce HTTP 429 rate limiting.",
+      ],
+    },
     {
       version: "0.7.0",
       date: "2026-03-25",
@@ -91,9 +100,12 @@
     refreshIntervalMs: 5000,
     fetchTimeoutMs: 8000,
     minFetchGapMs: 1000,
+    interactionRenderDurationMs: 1600,
+    interactionSettleDelayMs: 900,
     maxQueryRadiusNm: 100,
     minQueryRadiusNm: 10,
     logBufferSize: 500,
+    rateLimitBackoffMs: 30000,
     viewportPollIntervalMs: 1000,
     urlPollIntervalMs: 400,
     domWatchDebounceMs: 150,
@@ -118,10 +130,13 @@
     heartbeatTimer: 0,
     hoverMarkerId: null,
     hudRootEl: null,
+    interactionFrameHandle: 0,
+    interactionRenderUntil: 0,
     isFetching: false,
     lastError: "",
     lastFetchCompletedAt: 0,
     lastFetchStartedAt: 0,
+    lastMapInteractionAt: 0,
     lastLocationHref: window.location.href,
     lastLoggedMapStateKey: "",
     lastLoggedViewportKey: "",
@@ -142,6 +157,7 @@
     nextFetchDueAt: 0,
     overlayRootEl: null,
     pendingViewportRefresh: 0,
+    rateLimitBackoffUntil: 0,
     renderScheduled: false,
     statusLevel: "boot",
     statusText: "Booting",
@@ -979,6 +995,10 @@
       return false;
     }
 
+    if (state.hudRootEl && (element === state.hudRootEl || state.hudRootEl.contains(element))) {
+      return false;
+    }
+
     const rect = element.getBoundingClientRect();
     if (rect.width < 280 || rect.height < 280) {
       return false;
@@ -1148,6 +1168,40 @@
       state.pendingViewportRefresh = 0;
       refreshViewportBinding("force");
     }, CONFIG.domWatchDebounceMs);
+  }
+
+  function kickInteractionRender(reason) {
+    const now = Date.now();
+    state.lastMapInteractionAt = now;
+    state.interactionRenderUntil = Math.max(
+      state.interactionRenderUntil,
+      now + CONFIG.interactionRenderDurationMs
+    );
+
+    if (state.interactionFrameHandle) {
+      return;
+    }
+
+    const tick = () => {
+      state.interactionFrameHandle = 0;
+      const stillActive = Date.now() < state.interactionRenderUntil;
+      if (!stillActive) {
+        return;
+      }
+
+      syncMapStateFromUrl();
+      if (!state.viewportEl || !state.viewportEl.isConnected) {
+        refreshViewportBinding("force");
+      } else {
+        updateViewportRect();
+      }
+      scheduleRender();
+
+      state.interactionFrameHandle = window.requestAnimationFrame(tick);
+    };
+
+    logEvent("debug", "Starting interaction render loop", { reason });
+    state.interactionFrameHandle = window.requestAnimationFrame(tick);
   }
 
   function parseMapStateFromUrl(href) {
@@ -1468,6 +1522,8 @@
       return;
     }
 
+    syncMapStateFromUrl();
+
     if (!state.viewportEl || !state.viewportEl.isConnected) {
       refreshViewportBinding("force");
     } else {
@@ -1610,6 +1666,14 @@
     }
 
     const now = Date.now();
+    if (now < state.rateLimitBackoffUntil) {
+      return;
+    }
+
+    if (now - state.lastMapInteractionAt < CONFIG.interactionSettleDelayMs) {
+      return;
+    }
+
     if (now < state.nextFetchDueAt) {
       return;
     }
@@ -1637,6 +1701,7 @@
       state.lastSuccessAt = Date.now();
       state.lastFetchCompletedAt = state.lastSuccessAt;
       state.lastError = "";
+      state.rateLimitBackoffUntil = 0;
       state.nextFetchDueAt = Date.now() + CONFIG.refreshIntervalMs;
        logEvent("info", "Flight data refresh succeeded", {
         radiusNm: request.radiusNm,
@@ -1647,14 +1712,19 @@
     } catch (error) {
       state.lastFetchCompletedAt = Date.now();
       state.lastError = error instanceof Error ? error.message : String(error);
-      state.nextFetchDueAt = Date.now() + CONFIG.refreshIntervalMs;
+      const isRateLimited = state.lastError.includes("429");
+      state.rateLimitBackoffUntil = isRateLimited ? Date.now() + CONFIG.rateLimitBackoffMs : 0;
+      state.nextFetchDueAt = Date.now() + (isRateLimited ? CONFIG.rateLimitBackoffMs : CONFIG.refreshIntervalMs);
       logEvent("error", "Flight data refresh failed", error);
 
-      if (Date.now() - state.lastSuccessAt > CONFIG.refreshIntervalMs * 2) {
+      if (!isRateLimited && Date.now() - state.lastSuccessAt > CONFIG.refreshIntervalMs * 2) {
         state.aircraft = [];
       }
 
-      setStatus("error", "Fetch failed, showing last good frame");
+      setStatus(
+        "error",
+        isRateLimited ? "Rate limited, backing off before next refresh" : "Fetch failed, showing last good frame"
+      );
       scheduleRender();
     } finally {
       state.isFetching = false;
@@ -1699,13 +1769,39 @@
     });
 
     window.addEventListener("resize", () => {
+      kickInteractionRender("resize");
       refreshViewportBinding("force");
       scheduleRender();
     }, { passive: true });
 
     window.addEventListener("popstate", () => {
+      kickInteractionRender("popstate");
       syncMapStateFromUrl();
       scheduleRender();
+    }, { passive: true });
+
+    window.addEventListener("wheel", () => {
+      kickInteractionRender("wheel");
+    }, { passive: true });
+
+    window.addEventListener("pointerdown", () => {
+      kickInteractionRender("pointerdown");
+    }, { passive: true });
+
+    window.addEventListener("pointermove", () => {
+      if (state.lastMapInteractionAt && Date.now() - state.lastMapInteractionAt < CONFIG.interactionRenderDurationMs) {
+        kickInteractionRender("pointermove");
+      }
+    }, { passive: true });
+
+    window.addEventListener("touchstart", () => {
+      kickInteractionRender("touchstart");
+    }, { passive: true });
+
+    window.addEventListener("keydown", (event) => {
+      if (event.key === "+" || event.key === "-" || event.key === "=" || event.key === "_") {
+        kickInteractionRender("keydown");
+      }
     }, { passive: true });
 
     window.addEventListener("mousemove", onMouseMove, { passive: true });
