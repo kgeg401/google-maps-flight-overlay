@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Google Maps Flight Overlay
 // @namespace    https://github.com/kgeg401/google-maps-flight-overlay
-// @version      0.8.0
+// @version      0.9.0
 // @description  Overlay live aircraft markers on Google Maps using Airplanes.live.
 // @match        https://www.google.com/maps/*
 // @noframes
@@ -11,6 +11,7 @@
 // @grant        GM_registerMenuCommand
 // @grant        GM.xmlHttpRequest
 // @connect      api.airplanes.live
+// @connect      api.adsbdb.com
 // @homepageURL  https://github.com/kgeg401/google-maps-flight-overlay
 // @supportURL   https://github.com/kgeg401/google-maps-flight-overlay/issues
 // @updateURL    https://raw.githubusercontent.com/kgeg401/google-maps-flight-overlay/main/google-maps-flight-overlay.user.js
@@ -20,8 +21,17 @@
 (function () {
   "use strict";
 
-  const VERSION = "0.8.0";
+  const VERSION = "0.9.0";
   const VERSION_HISTORY = [
+    {
+      version: "0.9.0",
+      date: "2026-03-26",
+      changes: [
+        "Added click-selected aircraft details with a persistent info card.",
+        "Added lazy aircraft photo and route lookups via api.adsbdb.com when available.",
+        "Kept destination blank when no route data is available for the selected aircraft.",
+      ],
+    },
     {
       version: "0.8.0",
       date: "2026-03-26",
@@ -125,6 +135,9 @@
     badgeEl: null,
     canvasEl: null,
     canvasCtx: null,
+    detailsPanelBodyEl: null,
+    detailsPanelEl: null,
+    detailsPanelOpen: false,
     domObserver: null,
     drawnMarkers: [],
     heartbeatTimer: 0,
@@ -159,6 +172,13 @@
     pendingViewportRefresh: 0,
     rateLimitBackoffUntil: 0,
     renderScheduled: false,
+    selectedAircraftDetails: null,
+    selectedAircraftDetailsCache: new Map(),
+    selectedAircraftDetailsError: "",
+    selectedAircraftDetailsKey: "",
+    selectedAircraftDetailsLoading: false,
+    selectedAircraftId: null,
+    selectedAircraftSnapshot: null,
     statusLevel: "boot",
     statusText: "Booting",
     tooltipEl: null,
@@ -410,6 +430,127 @@
       line-height: 1.35;
       white-space: pre-line;
     }
+
+    #gm-flight-overlay-details-panel {
+      position: fixed;
+      right: 12px;
+      bottom: 12px;
+      width: min(360px, calc(100vw - 24px));
+      max-height: min(62vh, 560px);
+      display: none;
+      flex-direction: column;
+      pointer-events: auto;
+      border: 1px solid rgba(120, 190, 255, 0.22);
+      background: rgba(6, 10, 18, 0.96);
+      color: #f3f7ff;
+      border-radius: 14px;
+      box-shadow: 0 12px 24px rgba(0, 0, 0, 0.28);
+      backdrop-filter: blur(8px);
+      overflow: hidden;
+    }
+
+    #gm-flight-overlay-details-panel[data-open="true"] {
+      display: flex;
+    }
+
+    .gm-flight-overlay-details-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 10px 12px;
+      border-bottom: 1px solid rgba(120, 190, 255, 0.14);
+      background: rgba(255, 255, 255, 0.03);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+    }
+
+    .gm-flight-overlay-details-close {
+      border: 1px solid rgba(120, 190, 255, 0.22);
+      background: rgba(255, 255, 255, 0.05);
+      color: #f3f7ff;
+      border-radius: 8px;
+      padding: 4px 8px;
+      font-size: 11px;
+      line-height: 1.2;
+      cursor: pointer;
+    }
+
+    .gm-flight-overlay-details-close:hover {
+      background: rgba(89, 215, 255, 0.12);
+    }
+
+    #gm-flight-overlay-details-body {
+      overflow: auto;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .gm-flight-overlay-details-card {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .gm-flight-overlay-details-photo {
+      width: 100%;
+      max-height: 180px;
+      object-fit: cover;
+      border-radius: 10px;
+      border: 1px solid rgba(120, 190, 255, 0.16);
+      background: rgba(255, 255, 255, 0.04);
+    }
+
+    .gm-flight-overlay-details-photo-placeholder {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 120px;
+      border-radius: 10px;
+      border: 1px dashed rgba(120, 190, 255, 0.18);
+      background: rgba(255, 255, 255, 0.03);
+      color: rgba(243, 247, 255, 0.72);
+      text-align: center;
+      padding: 12px;
+    }
+
+    .gm-flight-overlay-details-title {
+      font-size: 16px;
+      font-weight: 700;
+      line-height: 1.2;
+    }
+
+    .gm-flight-overlay-details-subtitle {
+      color: rgba(243, 247, 255, 0.78);
+      font-size: 12px;
+    }
+
+    .gm-flight-overlay-details-grid {
+      display: grid;
+      grid-template-columns: max-content 1fr;
+      gap: 6px 10px;
+    }
+
+    .gm-flight-overlay-details-key {
+      color: rgba(243, 247, 255, 0.72);
+      white-space: nowrap;
+    }
+
+    .gm-flight-overlay-details-value {
+      color: #f3f7ff;
+      min-width: 0;
+      word-break: break-word;
+    }
+
+    .gm-flight-overlay-details-note {
+      color: rgba(243, 247, 255, 0.72);
+      font-size: 11px;
+    }
   `);
 
   function clamp(value, min, max) {
@@ -497,6 +638,44 @@
     }
     const deltaSec = Math.max(0, Math.round((Date.now() - updatedAt) / 1000));
     return `${deltaSec}s ago`;
+  }
+
+  function formatRouteEndpoint(airport) {
+    if (!airport) {
+      return "";
+    }
+
+    const code = cleanText(airport.iataCode) || cleanText(airport.icaoCode) || null;
+    const name = cleanText(airport.name) || cleanText(airport.municipality) || null;
+
+    if (code && name) {
+      return `${code} ${name}`;
+    }
+    return code || name || "";
+  }
+
+  function formatAircraftTitle(aircraft, details) {
+    return (
+      cleanText(aircraft.callsign) ||
+      cleanText(details && details.registration) ||
+      cleanText(aircraft.registration) ||
+      cleanText(aircraft.id) ||
+      "Selected aircraft"
+    );
+  }
+
+  function formatAircraftSubtitle(aircraft, details) {
+    const parts = [
+      cleanText(details && details.manufacturer),
+      cleanText(details && details.type),
+      cleanText(aircraft.aircraftType),
+    ].filter(Boolean);
+
+    if (parts.length > 0) {
+      return parts.join(" ");
+    }
+
+    return "Live aircraft details";
   }
 
   function serializeLogValue(value, depth) {
@@ -813,6 +992,282 @@
     state.badgeEl.textContent = summary;
   }
 
+  function createPhotoFallback(message) {
+    const placeholderEl = document.createElement("div");
+    placeholderEl.className = "gm-flight-overlay-details-photo-placeholder";
+    placeholderEl.textContent = message;
+    return placeholderEl;
+  }
+
+  function updateDetailsPanel() {
+    if (!state.detailsPanelEl || !state.detailsPanelBodyEl) {
+      return;
+    }
+
+    const aircraft = state.selectedAircraftSnapshot;
+    const open = Boolean(state.detailsPanelOpen && aircraft);
+    state.detailsPanelEl.dataset.open = open ? "true" : "false";
+    state.detailsPanelBodyEl.replaceChildren();
+
+    if (!open || !aircraft) {
+      return;
+    }
+
+    const details = state.selectedAircraftDetails;
+    const wrapperEl = document.createElement("div");
+    wrapperEl.className = "gm-flight-overlay-details-card";
+
+    const titleEl = document.createElement("div");
+    titleEl.className = "gm-flight-overlay-details-title";
+    titleEl.textContent = formatAircraftTitle(aircraft, details);
+    wrapperEl.appendChild(titleEl);
+
+    const subtitleEl = document.createElement("div");
+    subtitleEl.className = "gm-flight-overlay-details-subtitle";
+    subtitleEl.textContent = formatAircraftSubtitle(aircraft, details);
+    wrapperEl.appendChild(subtitleEl);
+
+    const photoUrl = cleanText(details && (details.photoThumbnailUrl || details.photoUrl));
+    if (photoUrl) {
+      const imgEl = document.createElement("img");
+      imgEl.className = "gm-flight-overlay-details-photo";
+      imgEl.src = photoUrl;
+      imgEl.alt = formatAircraftTitle(aircraft, details);
+      imgEl.addEventListener("error", () => {
+        imgEl.replaceWith(createPhotoFallback("Aircraft photo could not be loaded"));
+      }, { once: true });
+      wrapperEl.appendChild(imgEl);
+    } else {
+      wrapperEl.appendChild(
+        createPhotoFallback(
+          state.selectedAircraftDetailsLoading ? "Loading aircraft photo..." : "No aircraft photo available"
+        )
+      );
+    }
+
+    const gridEl = document.createElement("div");
+    gridEl.className = "gm-flight-overlay-details-grid";
+
+    const rows = [
+      ["Callsign", cleanText(aircraft.callsign) || ""],
+      ["Registration", cleanText(details && details.registration) || cleanText(aircraft.registration) || ""],
+      ["Hex", cleanText(aircraft.id) || ""],
+      ["Type", cleanText(details && details.type) || cleanText(details && details.icaoType) || cleanText(aircraft.aircraftType) || ""],
+      ["Operator", cleanText(details && details.airlineName) || cleanText(details && details.owner) || ""],
+      ["Altitude", formatAltitude(aircraft)],
+      ["Speed", formatSpeed(aircraft.speedKt)],
+      ["Heading", formatHeading(aircraft.heading)],
+      ["Origin", formatRouteEndpoint(details && details.origin)],
+      ["Destination", formatRouteEndpoint(details && details.destination)],
+      ["Updated", formatAge(aircraft.updatedAt)],
+    ];
+
+    for (const [key, value] of rows) {
+      const keyEl = document.createElement("div");
+      keyEl.className = "gm-flight-overlay-details-key";
+      keyEl.textContent = key;
+
+      const valueEl = document.createElement("div");
+      valueEl.className = "gm-flight-overlay-details-value";
+      valueEl.textContent = value || "blank";
+
+      gridEl.appendChild(keyEl);
+      gridEl.appendChild(valueEl);
+    }
+
+    wrapperEl.appendChild(gridEl);
+
+    const noteEl = document.createElement("div");
+    noteEl.className = "gm-flight-overlay-details-note";
+    if (state.selectedAircraftDetailsLoading) {
+      noteEl.textContent = "Loading aircraft photo and route details...";
+    } else if (state.selectedAircraftDetailsError) {
+      noteEl.textContent = state.selectedAircraftDetailsError;
+    } else if (!details || (!details.destination && !details.origin)) {
+      noteEl.textContent = "No route information is available for this aircraft.";
+    } else {
+      noteEl.textContent = "Photo and route details are provided when available by adsbdb.";
+    }
+    wrapperEl.appendChild(noteEl);
+
+    state.detailsPanelBodyEl.appendChild(wrapperEl);
+  }
+
+  function setDetailsPanelOpen(open) {
+    state.detailsPanelOpen = Boolean(open);
+    updateDetailsPanel();
+  }
+
+  function clearSelectedAircraft() {
+    state.selectedAircraftId = null;
+    state.selectedAircraftSnapshot = null;
+    state.selectedAircraftDetails = null;
+    state.selectedAircraftDetailsError = "";
+    state.selectedAircraftDetailsKey = "";
+    state.selectedAircraftDetailsLoading = false;
+    setDetailsPanelOpen(false);
+    scheduleRender();
+  }
+
+  function buildAircraftDetailsLookup(aircraft) {
+    if (!aircraft) {
+      return null;
+    }
+
+    const modeS = cleanText(aircraft.id) ? aircraft.id.replace(/^~/, "").toUpperCase() : null;
+    const registration = cleanText(aircraft.registration);
+    const identifier = /^[0-9A-F]{6}$/i.test(modeS || "") ? modeS : registration;
+    if (!identifier) {
+      return null;
+    }
+
+    const callsign = cleanText(aircraft.callsign)
+      ? aircraft.callsign.replace(/\s+/g, "").toUpperCase()
+      : null;
+
+    const baseUrl = `https://api.adsbdb.com/v0/aircraft/${encodeURIComponent(identifier)}`;
+    const url = callsign
+      ? `${baseUrl}?callsign=${encodeURIComponent(callsign)}`
+      : baseUrl;
+
+    return {
+      key: `${identifier}|${callsign || ""}`,
+      url,
+    };
+  }
+
+  function normalizeAircraftDetailsPayload(payload) {
+    const response = payload && payload.response ? payload.response : null;
+    const aircraft = response && response.aircraft ? response.aircraft : null;
+    const flightroute = response && response.flightroute ? response.flightroute : null;
+
+    return {
+      registration: cleanText(aircraft && aircraft.registration),
+      manufacturer: cleanText(aircraft && aircraft.manufacturer),
+      type: cleanText(aircraft && aircraft.type),
+      icaoType: cleanText(aircraft && aircraft.icao_type),
+      owner: cleanText(aircraft && aircraft.registered_owner),
+      photoUrl: cleanText(aircraft && aircraft.url_photo),
+      photoThumbnailUrl: cleanText(aircraft && aircraft.url_photo_thumbnail),
+      airlineName: cleanText(flightroute && flightroute.airline && flightroute.airline.name),
+      origin: flightroute && flightroute.origin ? {
+        name: cleanText(flightroute.origin.name),
+        municipality: cleanText(flightroute.origin.municipality),
+        iataCode: cleanText(flightroute.origin.iata_code),
+        icaoCode: cleanText(flightroute.origin.icao_code),
+      } : null,
+      destination: flightroute && flightroute.destination ? {
+        name: cleanText(flightroute.destination.name),
+        municipality: cleanText(flightroute.destination.municipality),
+        iataCode: cleanText(flightroute.destination.iata_code),
+        icaoCode: cleanText(flightroute.destination.icao_code),
+      } : null,
+    };
+  }
+
+  async function loadSelectedAircraftDetails() {
+    const aircraft = state.selectedAircraftSnapshot;
+    const lookup = buildAircraftDetailsLookup(aircraft);
+    if (!aircraft || !lookup) {
+      state.selectedAircraftDetails = null;
+      state.selectedAircraftDetailsError = "No aircraft lookup key is available for photo or route data.";
+      state.selectedAircraftDetailsLoading = false;
+      updateDetailsPanel();
+      return;
+    }
+
+    state.selectedAircraftDetailsKey = lookup.key;
+
+    if (state.selectedAircraftDetailsCache.has(lookup.key)) {
+      state.selectedAircraftDetails = state.selectedAircraftDetailsCache.get(lookup.key);
+      state.selectedAircraftDetailsError = "";
+      state.selectedAircraftDetailsLoading = false;
+      updateDetailsPanel();
+      return;
+    }
+
+    state.selectedAircraftDetailsLoading = true;
+    state.selectedAircraftDetailsError = "";
+    state.selectedAircraftDetails = null;
+    updateDetailsPanel();
+
+    try {
+      const payload = await requestJson(lookup.url);
+      const details = normalizeAircraftDetailsPayload(payload);
+      state.selectedAircraftDetailsCache.set(lookup.key, details);
+
+      if (state.selectedAircraftDetailsKey === lookup.key) {
+        state.selectedAircraftDetails = details;
+        state.selectedAircraftDetailsError = "";
+        state.selectedAircraftDetailsLoading = false;
+        updateDetailsPanel();
+      }
+
+      logEvent("info", "Loaded selected aircraft details", {
+        key: lookup.key,
+        hasPhoto: Boolean(details.photoUrl || details.photoThumbnailUrl),
+        hasRoute: Boolean(details.origin || details.destination),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logEvent("warn", "Failed to load selected aircraft details", {
+        key: lookup.key,
+        message,
+      });
+      if (state.selectedAircraftDetailsKey === lookup.key) {
+        state.selectedAircraftDetails = null;
+        state.selectedAircraftDetailsLoading = false;
+        state.selectedAircraftDetailsError = message.includes("404")
+          ? "No extra photo or route details are available for this aircraft."
+          : "Extra aircraft details could not be loaded right now.";
+        updateDetailsPanel();
+      }
+    }
+  }
+
+  function selectAircraft(aircraft) {
+    if (!aircraft) {
+      return;
+    }
+
+    logEvent("info", "Selected aircraft for details", {
+      id: aircraft.id,
+      callsign: aircraft.callsign,
+      registration: aircraft.registration,
+    });
+    state.selectedAircraftId = aircraft.id;
+    state.selectedAircraftSnapshot = aircraft;
+    state.selectedAircraftDetails = null;
+    state.selectedAircraftDetailsError = "";
+    state.selectedAircraftDetailsLoading = false;
+    setDetailsPanelOpen(true);
+    void loadSelectedAircraftDetails();
+    scheduleRender();
+  }
+
+  function updateSelectedAircraftSnapshot() {
+    if (!state.selectedAircraftId) {
+      return;
+    }
+
+    const nextAircraft = state.aircraft.find((aircraft) => aircraft.id === state.selectedAircraftId) || null;
+    if (!nextAircraft) {
+      updateDetailsPanel();
+      return;
+    }
+
+    state.selectedAircraftSnapshot = nextAircraft;
+    const lookup = buildAircraftDetailsLookup(nextAircraft);
+    if (lookup && lookup.key !== state.selectedAircraftDetailsKey) {
+      state.selectedAircraftDetails = null;
+      state.selectedAircraftDetailsError = "";
+      state.selectedAircraftDetailsLoading = false;
+      void loadSelectedAircraftDetails();
+    } else {
+      updateDetailsPanel();
+    }
+  }
+
   function ensureHud() {
     if (state.hudRootEl && state.hudRootEl.isConnected) {
       return;
@@ -890,6 +1345,26 @@
     const tooltipEl = document.createElement("div");
     tooltipEl.id = "gm-flight-overlay-tooltip";
 
+    const detailsPanelEl = document.createElement("div");
+    detailsPanelEl.id = "gm-flight-overlay-details-panel";
+    detailsPanelEl.dataset.open = "false";
+
+    const detailsHeaderEl = document.createElement("div");
+    detailsHeaderEl.className = "gm-flight-overlay-details-header";
+    detailsHeaderEl.textContent = "Selected Flight";
+
+    const detailsCloseButtonEl = document.createElement("button");
+    detailsCloseButtonEl.type = "button";
+    detailsCloseButtonEl.className = "gm-flight-overlay-details-close";
+    detailsCloseButtonEl.textContent = "Hide";
+
+    const detailsBodyEl = document.createElement("div");
+    detailsBodyEl.id = "gm-flight-overlay-details-body";
+
+    detailsHeaderEl.appendChild(detailsCloseButtonEl);
+    detailsPanelEl.appendChild(detailsHeaderEl);
+    detailsPanelEl.appendChild(detailsBodyEl);
+
     const logPanelEl = document.createElement("div");
     logPanelEl.id = "gm-flight-overlay-log-panel";
     logPanelEl.dataset.open = "false";
@@ -931,6 +1406,7 @@
     hudRootEl.appendChild(menuButtonEl);
     hudRootEl.appendChild(menuPanelEl);
     hudRootEl.appendChild(tooltipEl);
+    hudRootEl.appendChild(detailsPanelEl);
     hudRootEl.appendChild(logPanelEl);
     (document.body || document.documentElement).appendChild(hudRootEl);
 
@@ -938,6 +1414,8 @@
     state.canvasEl = canvasEl;
     state.canvasCtx = canvasEl.getContext("2d");
     state.badgeEl = badgeEl;
+    state.detailsPanelBodyEl = detailsBodyEl;
+    state.detailsPanelEl = detailsPanelEl;
     state.menuButtonEl = menuButtonEl;
     state.menuInfoEl = menuInfoEl;
     state.menuPanelEl = menuPanelEl;
@@ -985,7 +1463,12 @@
       setMenuOpen(false);
     });
 
+    detailsCloseButtonEl.addEventListener("click", () => {
+      clearSelectedAircraft();
+    });
+
     updateBadge();
+    updateDetailsPanel();
     updateLogPanel();
     updateMenuPanel();
   }
@@ -1461,36 +1944,24 @@
     state.tooltipEl.style.display = "none";
   }
 
-  function updateHoverState() {
+  function findMarkerAtClientPoint(clientX, clientY, hitRadiusPx) {
     if (!state.viewportRect || state.drawnMarkers.length === 0) {
-      const hadHover = state.hoverMarkerId !== null;
-      state.hoverMarkerId = null;
-      hideTooltip();
-      if (hadHover) {
-        scheduleRender();
-      }
-      return;
+      return null;
     }
 
-    const localX = state.mouseX - state.viewportRect.left;
-    const localY = state.mouseY - state.viewportRect.top;
-
+    const localX = clientX - state.viewportRect.left;
+    const localY = clientY - state.viewportRect.top;
     if (
       localX < 0 ||
       localY < 0 ||
       localX > state.viewportRect.width ||
       localY > state.viewportRect.height
     ) {
-      if (state.hoverMarkerId !== null) {
-        state.hoverMarkerId = null;
-        scheduleRender();
-      }
-      hideTooltip();
-      return;
+      return null;
     }
 
     let bestMarker = null;
-    let bestDistanceSq = CONFIG.hoverHitRadiusPx * CONFIG.hoverHitRadiusPx;
+    let bestDistanceSq = hitRadiusPx * hitRadiusPx;
 
     for (const marker of state.drawnMarkers) {
       const dx = marker.x - localX;
@@ -1502,17 +1973,37 @@
       }
     }
 
-    const nextHoverId = bestMarker ? bestMarker.aircraft.id : null;
+    return bestMarker;
+  }
+
+  function updateHoverState() {
+    if (!state.viewportRect || state.drawnMarkers.length === 0) {
+      const hadHover = state.hoverMarkerId !== null;
+      state.hoverMarkerId = null;
+      hideTooltip();
+      if (hadHover) {
+        scheduleRender();
+      }
+      return;
+    }
+
+    const bestMarker = findMarkerAtClientPoint(state.mouseX, state.mouseY, CONFIG.hoverHitRadiusPx);
+    if (!bestMarker) {
+      if (state.hoverMarkerId !== null) {
+        state.hoverMarkerId = null;
+        scheduleRender();
+      }
+      hideTooltip();
+      return;
+    }
+
+    const nextHoverId = bestMarker.aircraft.id;
     if (nextHoverId !== state.hoverMarkerId) {
       state.hoverMarkerId = nextHoverId;
       scheduleRender();
     }
 
-    if (bestMarker) {
-      renderTooltip(bestMarker);
-    } else {
-      hideTooltip();
-    }
+    renderTooltip(bestMarker);
   }
 
   function renderFrame() {
@@ -1620,6 +2111,8 @@
         heading: firstFiniteNumber(record.track, record.true_heading, record.mag_heading, record.nav_heading),
         altitudeFt,
         callsign: cleanText(record.flight) || cleanText(record.r) || null,
+        registration: cleanText(record.r),
+        aircraftType: cleanText(record.t),
         speedKt: firstFiniteNumber(record.gs, record.tas, record.ias),
         source: cleanText(record.type) || "airplanes.live",
         updatedAt: deriveUpdatedAtMs(record, nowSec),
@@ -1707,6 +2200,7 @@
         radiusNm: request.radiusNm,
         aircraftCount: aircraft.length,
       });
+      updateSelectedAircraftSnapshot();
       setStatus("ok", `Live: ${aircraft.length} aircraft from Airplanes.live`);
       scheduleRender();
     } catch (error) {
@@ -1803,6 +2297,17 @@
         kickInteractionRender("keydown");
       }
     }, { passive: true });
+
+    window.addEventListener("click", (event) => {
+      if (state.hudRootEl && event.target instanceof Node && state.hudRootEl.contains(event.target)) {
+        return;
+      }
+
+      const marker = findMarkerAtClientPoint(event.clientX, event.clientY, CONFIG.hoverHitRadiusPx + 6);
+      if (marker) {
+        selectAircraft(marker.aircraft);
+      }
+    }, true);
 
     window.addEventListener("mousemove", onMouseMove, { passive: true });
     document.addEventListener("visibilitychange", onVisibilityChange, { passive: true });

@@ -4,7 +4,7 @@ Personal-use Tampermonkey userscript that overlays live aircraft markers on top 
 
 It uses the free Airplanes.live point-radius endpoint directly from the browser. There is no backend, no paid API, and no scraping of third-party tracker pages in v1.
 
-Current version: `0.8.0`
+Current version: `0.9.0`
 Repository: `https://github.com/kgeg401/google-maps-flight-overlay`
 
 ## Files
@@ -85,6 +85,12 @@ The script has a `CONFIG` block near the top. These are the main values you may 
   - speed
   - hex/id
   - age of the last update
+- Clicking a marker opens a persistent details card with:
+  - aircraft photo when available
+  - registration
+  - aircraft type
+  - operator/airline when available
+  - origin and destination when route data is available
 
 ## Known Limits
 
@@ -97,6 +103,7 @@ The script has a `CONFIG` block near the top. These are the main values you may 
 - v1 does not include labels, filters, persistence, settings sync, or source fallback.
 - Log export uses the browser clipboard. If clipboard access is blocked by the browser, log copying can fail.
 - Airplanes.live can return `HTTP 429` rate limits. The script now backs off after rate limiting, but quick repeated map moves can still temporarily suppress fresh data.
+- Aircraft photos and route details are looked up lazily via `api.adsbdb.com` only after you click a marker, and some aircraft will not have route or photo data.
 - As of Tampermonkey 5.4.1 on Chrome, userscript injection requires the browser's userscript permission. Based on Tampermonkey's official changelog and FAQ, you may need Chrome's `Allow User Scripts` permission and Developer Mode enabled before any page UI can appear.
 
 ## Manual Checks
@@ -117,15 +124,23 @@ Use these checks after installing:
 12. Use Tampermonkey's `Copy Flight Overlay Logs` command and confirm a log dump is copied.
 13. Open a Google Maps URL like `https://www.google.com/maps/@41.5932759,-86.9125756,8641m/data=!3m1!1e3` and confirm the overlay no longer pauses on the `...m...` URL shape.
 14. Zoom and pan the map after aircraft have loaded and confirm the existing markers rescale and reposition more smoothly before the next fetch.
+15. Click a marker and confirm the details card opens with route and photo data when available.
 
 ## Data Source
 
 - Airplanes.live API guide: `https://airplanes.live/api-guide/`
 - Airplanes.live field descriptions: `https://airplanes.live/rest-api-adsb-data-field-descriptions/`
+- adsbdb public API: `https://github.com/mrjackwills/adsbdb`
 
 ## Version History
 
 Append a new entry here and in the userscript `VERSION_HISTORY` constant whenever the script changes.
+
+### `0.9.0` - 2026-03-26
+
+- Added click-selected aircraft details with a persistent info card.
+- Added lazy aircraft photo and route lookups via `api.adsbdb.com` when available.
+- Kept destination blank when no route data is available for the selected aircraft.
 
 ### `0.8.0` - 2026-03-26
 
