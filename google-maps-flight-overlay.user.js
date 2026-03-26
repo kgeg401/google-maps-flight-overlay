@@ -1,11 +1,13 @@
 // ==UserScript==
 // @name         Google Maps Flight Overlay
 // @namespace    https://github.com/kgeg401/google-maps-flight-overlay
-// @version      0.5.0
+// @version      0.6.0
 // @description  Overlay live aircraft markers on Google Maps using Airplanes.live.
 // @match        https://www.google.com/maps/*
+// @noframes
 // @run-at       document-idle
 // @grant        GM_addStyle
+// @grant        GM_registerMenuCommand
 // @grant        GM.xmlHttpRequest
 // @connect      api.airplanes.live
 // @homepageURL  https://github.com/kgeg401/google-maps-flight-overlay
@@ -17,8 +19,17 @@
 (function () {
   "use strict";
 
-  const VERSION = "0.5.0";
+  const VERSION = "0.6.0";
   const VERSION_HISTORY = [
+    {
+      version: "0.6.0",
+      date: "2026-03-25",
+      changes: [
+        "Added Tampermonkey menu commands to open the overlay UI.",
+        "Added a Tampermonkey menu command to toggle and copy overlay logs.",
+        "Restricted execution to the top-level page with @noframes.",
+      ],
+    },
     {
       version: "0.5.0",
       date: "2026-03-25",
@@ -551,6 +562,63 @@
     textarea.select();
     document.execCommand("copy");
     textarea.remove();
+  }
+
+  function openOverlayMenuFromCommand() {
+    setMenuOpen(true);
+    logEvent("info", "Opened overlay menu from Tampermonkey command");
+    setStatus("ok", "Opened menu from Tampermonkey");
+  }
+
+  function toggleLogsFromCommand() {
+    const nextOpen = !state.logPanelOpen;
+    setLogPanelOpen(nextOpen);
+    logEvent("info", "Toggled log panel from Tampermonkey command", {
+      open: nextOpen,
+    });
+    setStatus("ok", nextOpen ? "Opened logs from Tampermonkey" : "Collapsed logs from Tampermonkey");
+  }
+
+  async function copyLogsFromCommand() {
+    try {
+      await copyLogsToClipboard();
+      logEvent("info", "Copied logs from Tampermonkey command");
+      setStatus("ok", "Copied logs from Tampermonkey");
+    } catch (error) {
+      state.lastError = error instanceof Error ? error.message : String(error);
+      logEvent("error", "Failed to copy logs from Tampermonkey command", error);
+      setStatus("error", "Failed to copy logs from Tampermonkey");
+    }
+  }
+
+  function registerTampermonkeyMenuCommands() {
+    if (typeof GM_registerMenuCommand !== "function") {
+      logEvent("warn", "GM_registerMenuCommand is unavailable");
+      return;
+    }
+
+    try {
+      GM_registerMenuCommand("Open Flight Overlay Menu", openOverlayMenuFromCommand, {
+        title: "Open the Google Maps Flight Overlay menu",
+        id: "gm-flight-overlay-open-menu",
+        autoClose: true,
+      });
+      GM_registerMenuCommand("Toggle Flight Overlay Logs", toggleLogsFromCommand, {
+        title: "Open or collapse the Google Maps Flight Overlay log panel",
+        id: "gm-flight-overlay-toggle-logs",
+        autoClose: true,
+      });
+      GM_registerMenuCommand("Copy Flight Overlay Logs", () => {
+        void copyLogsFromCommand();
+      }, {
+        title: "Copy the Google Maps Flight Overlay log dump to the clipboard",
+        id: "gm-flight-overlay-copy-logs",
+        autoClose: true,
+      });
+      logEvent("info", "Registered Tampermonkey menu commands");
+    } catch (error) {
+      logEvent("error", "Failed to register Tampermonkey menu commands", error);
+    }
   }
 
   function formatLogEntry(entry) {
@@ -1578,6 +1646,7 @@
 
   function start() {
     ensureHud();
+    registerTampermonkeyMenuCommands();
     logEvent("info", "Starting userscript", {
       version: VERSION,
       href: window.location.href,
