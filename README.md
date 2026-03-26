@@ -109,16 +109,16 @@ Use these checks after installing:
 
 Append a new entry here and in the userscript `VERSION_HISTORY` constant whenever the script changes.
 
+### `0.5.0` - 2026-03-25
+
+- Added GitHub-backed Tampermonkey auto-update metadata.
+- Prepared the project for installation from a dedicated public repository.
+
 ### `0.4.0` - 2026-03-25
 
 - Added built-in version history.
 - Included version history in the copied log dump.
 - Surfaced current version details in the overlay menu.
-
-### `0.5.0` - 2026-03-25
-
-- Added GitHub-backed Tampermonkey auto-update metadata.
-- Prepared the project for installation from a dedicated public repository.
 
 ### `0.3.0` - 2026-03-25
 
