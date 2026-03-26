@@ -2,14 +2,18 @@
 
 Personal-use Tampermonkey userscript that overlays live aircraft markers on top of `https://www.google.com/maps/*`.
 
-It uses the free Airplanes.live point-radius endpoint directly from the browser. There is no backend, no paid API, and no scraping of third-party tracker pages in v1.
+It uses the free Airplanes.live point-radius endpoint directly from the browser. There is no backend, no paid API, and no scraping of Google flight cards or third-party tracker pages.
 
-Current version: `0.9.0`
+Current version: `0.10.0`
 Repository: `https://github.com/kgeg401/google-maps-flight-overlay`
 
 ## Files
 
-- `google-maps-flight-overlay.user.js`: self-contained Tampermonkey userscript
+- `google-maps-flight-overlay.user.js`: published Tampermonkey userscript
+- `dist/google-maps-flight-overlay.user.js`: built artifact copy
+- `src/`: modular source tree
+- `scripts/`: build helpers
+- `CREDITS.md`: attribution for permissive-source concepts and references
 
 ## Supported Environment
 
@@ -36,9 +40,9 @@ If the script is active, you should see:
 
 - a small status badge in the top-right corner
 - a larger `Flights` launcher in the bottom-left corner
-- the control menu auto-open the first time the page loads
+- movable overlay panels for menu, logs, settings, selected flight details, and debug state
 
-Click the bottom-left `Flights` launcher to open or close the overlay menu. Use the menu to toggle logs, copy logs, clear logs, or close the menu again.
+Click the bottom-left `Flights` launcher to open or close the overlay menu. Use the menu to open settings, debug, or logs.
 
 You can also use Tampermonkey's own script menu while you are on Google Maps:
 
@@ -46,51 +50,35 @@ You can also use Tampermonkey's own script menu while you are on Google Maps:
 - `Toggle Flight Overlay Logs`
 - `Copy Flight Overlay Logs`
 
-## Configurable Constants
+## Build
 
-The script has a `CONFIG` block near the top. These are the main values you may want to tweak:
+```bash
+npm install
+npm run build
+```
 
-- `refreshIntervalMs`
-- `fetchTimeoutMs`
-- `minFetchGapMs`
-- `maxQueryRadiusNm`
-- `minQueryRadiusNm`
-- `hoverHitRadiusPx`
-- `renderMarginPx`
-- `markerSizePx`
-- `markerFillColor`
-- `markerStrokeColor`
-- `markerHighlightColor`
-- `debug`
+The build bundles `src/index.js` into the published userscript and updates both:
+
+- `google-maps-flight-overlay.user.js`
+- `dist/google-maps-flight-overlay.user.js`
 
 ## Behavior
 
 - The script waits for a visible Google Maps viewport.
-- It parses map state from the current Google Maps URL using the `@lat,lon,zoomz` form.
+- It parses map state from the current Google Maps URL using either `@lat,lon,zoomz` or `@lat,lon,metersm`.
 - It derives a center-radius query from the current map center and viewport size.
 - It fetches live aircraft from Airplanes.live every 5 seconds.
-- It rerenders markers on pan, zoom, resize, and viewport replacement without refetching on every visual change.
-- It provides a simple control menu opened from a bottom-left `Flights` launcher.
-- It auto-opens the menu on page load so script startup is obvious.
-- It also registers Tampermonkey menu commands so the UI and logs can be opened from the extension menu.
-- It supports both `@lat,lon,zoomz` Google Maps URLs and `@lat,lon,metersm` URLs by estimating zoom from the visible map scale.
-- It keeps rerendering during active pan and zoom interactions so loaded aircraft reposition more smoothly with the map.
-- It keeps a rolling in-script debug log with timestamps, message details, and error context.
-- The log panel can be expanded from the menu and collapsed again to save screen space.
-- The log panel includes `Copy`, `Clear`, and `Hide` controls.
-- Hovering near a marker shows:
-  - callsign
-  - altitude
-  - heading
-  - speed
-  - hex/id
-  - age of the last update
-- Clicking a marker opens a persistent details card with:
-  - aircraft photo when available
-  - registration
-  - aircraft type
-  - operator/airline when available
-  - origin and destination when route data is available
+- It rerenders markers during active pan and zoom interactions so loaded aircraft reposition smoothly before the next fetch.
+- It interpolates aircraft positions and headings between fetch snapshots instead of snapping every refresh.
+- It keeps a bounded trail history and renders trails for the selected aircraft by default.
+- It groups dense overlapping markers and supports click-to-expand spiderfy layouts in crowded views.
+- It switches into a decluttered cluster mode at lower zoom levels.
+- It persists marker size, hover hit radius, label mode, trail mode, density mode, photo mode, debug level, and panel layout through userscript storage.
+- It keeps a rolling structured debug log plus replay snapshots for deterministic troubleshooting.
+- It supports replay import/export from the debug panel.
+- Hovering near a marker shows a lightweight tooltip with callsign, altitude, heading, speed, hex, and age.
+- Clicking a marker opens a persistent details card with photo, registration, type, operator, and origin/destination when route data is available.
+- Selected-aircraft enrichment uses `adsbdb` first and only falls back to `ADSB.lol` when fields are missing. Fallback route/photo data are marked advisory.
 
 ## Known Limits
 
@@ -100,10 +88,12 @@ The script has a `CONFIG` block near the top. These are the main values you may 
 - v1 depends on Google Maps exposing a readable `@lat,lon,zoomz` or `@lat,lon,metersm` URL. If the page is in a mode that does not expose either shape, the overlay pauses instead of guessing.
 - `...m...` URLs use an estimated zoom derived from the visible map scale, so placement may be a little less precise than explicit `...z...` URLs.
 - The script does not use `unsafeWindow` or undocumented Google Maps internals, so viewport detection is heuristic and projection alignment is best-effort.
-- v1 does not include labels, filters, persistence, settings sync, or source fallback.
+- Marker projection is still based on the consumer Google Maps URL and viewport heuristics, so 3D/Earth-heavy scenes can drift more than flat map views.
 - Log export uses the browser clipboard. If clipboard access is blocked by the browser, log copying can fail.
 - Airplanes.live can return `HTTP 429` rate limits. The script now backs off after rate limiting, but quick repeated map moves can still temporarily suppress fresh data.
-- Aircraft photos and route details are looked up lazily via `api.adsbdb.com` only after you click a marker, and some aircraft will not have route or photo data.
+- Aircraft photos and route details are looked up lazily only after you click a marker, and some aircraft will still have no photo or no destination data.
+- The bundled airport fallback is intentionally compact, not exhaustive.
+- Replay mode is a debugging aid and currently cycles imported snapshots automatically instead of providing a full timeline scrubber.
 - As of Tampermonkey 5.4.1 on Chrome, userscript injection requires the browser's userscript permission. Based on Tampermonkey's official changelog and FAQ, you may need Chrome's `Allow User Scripts` permission and Developer Mode enabled before any page UI can appear.
 
 ## Manual Checks
@@ -117,24 +107,32 @@ Use these checks after installing:
 5. Open and close Google Maps side panels and confirm the overlay reattaches.
 6. Switch tabs and come back; the overlay should pause while hidden and refresh on return.
 7. Click the bottom-left flight icon and confirm the menu opens.
-8. Use `Toggle Logs` and confirm the detailed log panel opens.
-9. Click `Hide` on the log panel and confirm it collapses cleanly.
+8. Open Settings and change marker size, label mode, and trail mode, then reload the tab and confirm the settings persist.
+9. Use `Toggle Logs` and confirm the detailed log panel opens.
 10. Click `Copy Logs` and confirm a log dump is copied to the clipboard.
-11. Open Tampermonkey's script menu and confirm `Open Flight Overlay Menu` opens the UI.
-12. Use Tampermonkey's `Copy Flight Overlay Logs` command and confirm a log dump is copied.
+11. Click a marker in a dense area and confirm either direct selection or spiderfy expansion occurs instead of a dead click.
+12. Click a selected aircraft and confirm the details card opens with route and photo data when available.
 13. Open a Google Maps URL like `https://www.google.com/maps/@41.5932759,-86.9125756,8641m/data=!3m1!1e3` and confirm the overlay no longer pauses on the `...m...` URL shape.
-14. Zoom and pan the map after aircraft have loaded and confirm the existing markers rescale and reposition more smoothly before the next fetch.
-15. Click a marker and confirm the details card opens with route and photo data when available.
+14. Zoom and pan the map after aircraft have loaded and confirm the existing markers rescale and reposition smoothly before the next fetch.
+15. Open the Debug panel, export replay data, import it back, and confirm replay mode still renders aircraft frames without hitting the live API.
 
 ## Data Source
 
 - Airplanes.live API guide: `https://airplanes.live/api-guide/`
 - Airplanes.live field descriptions: `https://airplanes.live/rest-api-adsb-data-field-descriptions/`
 - adsbdb public API: `https://github.com/mrjackwills/adsbdb`
+- ADSB.lol API: `https://github.com/adsblol/api`
+- Airport-name fallback inspiration: `https://github.com/davidmegginson/ourairports-data`
 
 ## Version History
 
 Append a new entry here and in the userscript `VERSION_HISTORY` constant whenever the script changes.
+
+### `0.10.0` - 2026-03-26
+
+- Refactored the userscript into modular source files with a build step.
+- Added persistent settings, density handling, interpolation, trails, and debug/replay plumbing.
+- Expanded enrichment fallbacks while keeping the published Tampermonkey install to a single script file.
 
 ### `0.9.0` - 2026-03-26
 
